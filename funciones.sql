@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS YEAR (
 );
 
 CREATE TABLE IF NOT EXISTS SEMESTER (
-  semester INT CHECK(semester == 1 OR semester == 2),
+  semester INT CHECK(semester = 1 OR semester = 2),
   year INT,
   PRIMARY KEY (semester, year),
   FOREIGN KEY (year) REFERENCES YEAR
@@ -14,35 +14,37 @@ CREATE TABLE IF NOT EXISTS SEMESTER (
 
 CREATE TABLE IF NOT EXISTS QUARTER (
   quarter INT CHECK(quarter BETWEEN 1 AND 4),
-  semester INT,
+  semester INT NOT NULL,
   year INT,
-  PRIMARY KEY (quarter, semester, year),
+  PRIMARY KEY (quarter, year),
+  UNIQUE (semester, quarter, year),
   FOREIGN KEY (semester, year) REFERENCES SEMESTER(semester, year)
 );
 
 CREATE TABLE IF NOT EXISTS MONTH (
   month INT CHECK(month BETWEEN 1 AND 12),
-  quarter INT,
+  quarter INT NOT NULL,
   year INT,
   month_name TEXT NOT NULL CHECK(month_name LIKE 'enero' OR month_name LIKE 'febrero' OR month_name LIKE 'marzo' OR month_name LIKE 'abril' OR month_name LIKE 'mayo' OR month_name LIKE 'junio' OR month_name LIKE 'julio' OR month_name LIKE 'agosto' OR month_name LIKE 'septiembre' OR month_name LIKE 'octubre' OR month_name LIKE 'noviembre' OR month_name LIKE 'diciembre'),
-  PRIMARY KEY (month, quarter, year),
+  PRIMARY KEY (month, year),
+  UNIQUE (quarter, month, year),
   FOREIGN KEY (quarter, year) REFERENCES QUARTER(quarter, year)
 );
 
 CREATE TABLE IF NOT EXISTS DAY (
-  ID SERIAL
-  day INT CHECK (day BETWEEN 1 AND 31),
-  month INT,
-  year INT,
+  ID SERIAL,
+  day_t INT CHECK (day_t BETWEEN 1 AND 31) NOT NULL,
+  month INT NOT NULL,
+  year INT NOT NULL,
   day_name TEXT NOT NULL CHECK(day_name LIKE 'lunes' OR day_name LIKE 'martes' OR day_name LIKE 'miercoles' OR day_name LIKE 'jueves' OR day_name LIKE 'viernes' OR day_name LIKE 'sabado' OR day_name LIKE 'domingo'),
   isWeekend BOOLEAN NOT NULL,
   PRIMARY KEY(id),
-  UNIQUE (day, month, year) NOT NULL,
+  UNIQUE (day_t, month, year),
   FOREIGN KEY(month, year) REFERENCES MONTH(month, year)
 );
 
 CREATE TABLE IF NOT EXISTS DEFINITIVA (
-  ID INT NOT NULL, 
+  ID INT NOT NULL,
   Year_Birth INT NOT NULL,
   Education TEXT NOT NULL,
   Marital_Status TEXT NOT NULL,
@@ -65,83 +67,6 @@ CREATE TABLE IF NOT EXISTS DEFINITIVA (
 );
 
 -- CODIGO TRIGGERS
-
-CREATE TRIGGER beforeInsertDtCustomer
-BEFORE INSERT ON DEFINITIVA
-FOR EACH ROW
-EXECUTE PROCEDURE fillTable(); -- corre un "Trigger PSM"
-
-
-CREATE OR REPLACE FUNCTION fillTable() RETURNS TRIGGER AS
-$$
-DECLARE
-  auxYear YEAR.year%TYPE;
-  auxSemester SEMESTER.semester%TYPE;
-  auxQuarter QUARTER.quarter%TYPE;
-  auxMonth MONTH.month%TYPE;
-  auxDay DAY.day%TYPE;
-  auxDate DATE;
-  auxStringDate TEXT;
-  auxDayOfWeek INTEGER;
-  isWeekend BOOLEAN;
-  idDay DAY.ID%TYPE;
-BEGIN
-  
-  auxMonth := split_part(new.Dt_Customer, '/', 1);
-  auxDay := split_part(new.Dt_Customer, '/', 2);
-  auxYear := split_part(new.Dt_Customer, '/', 3);
-
-  auxStringDate := CONCAT(auxYear, auxMonth, auxDay); 
-  auxDate := TO_DATE(auxStringDate, 'YYYYMMDD'); 
-  
-  IF (auxMonth LIKE '' OR auxDay LIKE '' OR auxYear LIKE '') THEN
-    RAISE EXCEPTION 'INVALID DT_CUSTOMER';
-  END IF;
-
-  auxMonth := CAST(auxMonth AS INT);
-  auxDay := CAST(auxDay AS INT);
-  auxYear := CAST(auxYear AS INT);
-
-  auxSemester := CEILING(auxMonth/6);
-  auxQuarter := CEILING(auxMonth/3);
-
-  -- The day of the week (0 - 6; Sunday is 0)
-  auxDayOfWeek := EXTRACT(DOW FROM auxDate);
-  isWeekend := auxDayOfWeek = 0 OR auxDayOfWeek = 6;
-
-
-  IF (NOT EXISTS(SELECT year FROM YEAR WHERE year = auxYear)) THEN
-    INSERT INTO YEAR VALUES(auxYear, isLeap(auxYear));
-  END IF;
-
-  IF (NOT EXISTS(SELECT semester FROM SEMESTER WHERE semester = auxSemester AND year = auxYear)) THEN
-    INSERT INTO SEMESTER VALUES(auxSemester, auxYear);
-  END IF;
-  
-  IF (NOT EXISTS(SELECT quarter FROM QUARTER WHERE quarter = auxQuarter AND semester = auxSemester AND year = auxYear)) THEN
-    INSERT INTO QUARTER VALUES(auxQuarter, auxSemester, auxYear);
-  END IF;
-
-  IF (NOT EXISTS(SELECT month FROM MONTH WHERE month = auxMonth AND quarter = auxQuarter AND year = auxYear)) THEN
-    INSERT INTO MONTH VALUES(auxMonth, auxQuarter, auxYear, monthName(auxMonth))
-  END IF;
-
-  IF (NOT EXISTS(SELECT day FROM DAY WHERE day = auxDay AND month = auxMonth AND year = auxYear)) THEN
-    INSERT INTO DAY(day, month, year, day_name, isWeekend) VALUES(auxDay, auxMonth, auxYear, dayName(auxDayOfWeek), isWeekend)
-  END IF;
-
-  idDay := SELECT ID FROM DAY WHERE day = auxDay AND month = auxMonth AND year = auxYear;
-
-  INSERT INTO DEFINITIVA(Year_Birth, Education, Marital_Status, Income, Kidhome, Teenhome, Dt_Customer, Recency, MntWines, MntFruits, MntMeatProducts, MntFishProducts, MntSweetProducts, NumDealsPurchases, NumWebPurchases, NumCatalogPurchases, NumStorePurchases) 
-    VALUES(new.Year_Birth, new.Education, new.Marital_Status, new.Income, new.Kidhome, new.Teenhome, idDay, new.Recency, new.MntWines, new.MntFruits, new.MntMeatProducts, new.MntFishProducts, new.MntSweetProducts, new.NumDealsPurchases, new.NumWebPurchases, new.NumCatalogPurchases, new.NumStorePurchases);
-  
-  RETURN new;
-END;
-$$ LANGUAGE plpgsql;
-
--- CODIGO FUNCIONES
-
-CREATE OR REPLACE FUNCTION ReporteConsolidado(IN yearAmount INTEGER);
 
 CREATE OR REPLACE FUNCTION isLeap(IN year INTEGER)
   RETURNS BOOLEAN as $$
@@ -170,7 +95,7 @@ CREATE OR REPLACE FUNCTION monthName(IN month INTEGER)
       WHEN month = 11 THEN month_name := 'noviembre';
       WHEN month = 12 THEN month_name := 'diciembre';
       ELSE month_name := '';
-    END 
+    END CASE;
     RETURN month_name;
   END
 $$ LANGUAGE plpgsql;
@@ -187,7 +112,83 @@ CREATE OR REPLACE FUNCTION dayName(IN day INTEGER)
       WHEN day = 4 THEN day_name := 'jueves';
       WHEN day = 5 THEN day_name := 'viernes';
       WHEN day = 6 THEN day_name := 'sabado';
-    END 
+    END CASE;
     RETURN day_name;
   END
 $$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION fillTable() RETURNS TRIGGER AS
+$$
+DECLARE
+  auxYear YEAR.year%TYPE;
+  auxSemester SEMESTER.semester%TYPE;
+  auxQuarter QUARTER.quarter%TYPE;
+  auxMonth MONTH.month%TYPE;
+  auxDay DAY.day_t%TYPE;
+  auxDate DATE;
+  auxStringDate TEXT;
+  auxDayOfWeek INTEGER;
+  isWeekend BOOLEAN;
+  idDay DAY.ID%TYPE;
+BEGIN
+
+  auxMonth := split_part(new.Dt_Customer, '/', 1);
+  auxDay := split_part(new.Dt_Customer, '/', 2);
+  auxYear := split_part(new.Dt_Customer, '/', 3);
+
+  auxStringDate := CONCAT(auxYear, auxMonth, auxDay);
+  auxDate := TO_DATE(auxStringDate, 'YYYYMMDD');
+
+  IF (auxMonth LIKE '' OR auxDay LIKE '' OR auxYear LIKE '') THEN
+    RAISE EXCEPTION 'INVALID DT_CUSTOMER';
+  END IF;
+
+  auxMonth := CAST(auxMonth AS INT);
+  auxDay := CAST(auxDay AS INT);
+  auxYear := CAST(auxYear AS INT);
+
+  auxSemester := CEILING(auxMonth/6);
+  auxQuarter := CEILING(auxMonth/3);
+
+  -- The day of the week (0 - 6; Sunday is 0)
+  auxDayOfWeek := EXTRACT(DOW FROM auxDate);
+  isWeekend := auxDayOfWeek = 0 OR auxDayOfWeek = 6;
+
+
+  IF (NOT EXISTS(SELECT year FROM YEAR WHERE year = auxYear)) THEN
+    INSERT INTO YEAR VALUES(auxYear, isLeap(auxYear));
+  END IF;
+
+  IF (NOT EXISTS(SELECT semester FROM SEMESTER WHERE semester = auxSemester AND year = auxYear)) THEN
+    INSERT INTO SEMESTER VALUES(auxSemester, auxYear);
+  END IF;
+
+  IF (NOT EXISTS(SELECT quarter FROM QUARTER WHERE quarter = auxQuarter AND semester = auxSemester AND year = auxYear)) THEN
+    INSERT INTO QUARTER VALUES(auxQuarter, auxSemester, auxYear);
+  END IF;
+
+  IF (NOT EXISTS(SELECT month FROM MONTH WHERE month = auxMonth AND quarter = auxQuarter AND year = auxYear)) THEN
+    INSERT INTO MONTH VALUES(auxMonth, auxQuarter, auxYear, monthName(auxMonth));
+  END IF;
+
+  IF (NOT EXISTS(SELECT day_t FROM DAY WHERE day = auxDay AND month = auxMonth AND year = auxYear)) THEN
+    INSERT INTO DAY(day_t, month, year, day_name, isWeekend) VALUES(auxDay, auxMonth, auxYear, dayName(auxDayOfWeek), isWeekend);
+  END IF;
+
+  idDay := (SELECT ID FROM DAY WHERE day = auxDay AND month = auxMonth AND year = auxYear);
+
+  INSERT INTO DEFINITIVA VALUES(new.ID, new.Year_Birth, new.Education, new.Marital_Status, new.Income, new.Kidhome, new.Teenhome, idDay, new.Recency, new.MntWines, new.MntFruits, new.MntMeatProducts, new.MntFishProducts, new.MntSweetProducts, new.NumDealsPurchases, new.NumWebPurchases, new.NumCatalogPurchases, new.NumStorePurchases);
+
+  RETURN new;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER beforeInsertDtCustomer
+BEFORE INSERT ON DEFINITIVA
+FOR EACH ROW
+EXECUTE PROCEDURE fillTable(); -- corre un "Trigger PSM"
+
+
+-- CODIGO FUNCIONES
+
+-- CREATE OR REPLACE FUNCTION ReporteConsolidado(IN yearAmount INTEGER);
