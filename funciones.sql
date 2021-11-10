@@ -1,3 +1,4 @@
+
 -- CREACION DE TABLAS
 
 CREATE TABLE IF NOT EXISTS YEAR (
@@ -33,12 +34,14 @@ CREATE TABLE IF NOT EXISTS MONTH (
 
 CREATE TABLE IF NOT EXISTS DAY (
   ID SERIAL,
+  ID_text TEXT NOT NULL,
   day_t INT CHECK (day_t BETWEEN 1 AND 31) NOT NULL,
   month INT NOT NULL,
   year INT NOT NULL,
   day_name TEXT NOT NULL CHECK(day_name LIKE 'lunes' OR day_name LIKE 'martes' OR day_name LIKE 'miercoles' OR day_name LIKE 'jueves' OR day_name LIKE 'viernes' OR day_name LIKE 'sabado' OR day_name LIKE 'domingo'),
   isWeekend BOOLEAN NOT NULL,
   PRIMARY KEY(id),
+  UNIQUE (ID_text),
   UNIQUE (day_t, month, year),
   FOREIGN KEY(month, year) REFERENCES MONTH(month, year)
 );
@@ -48,10 +51,10 @@ CREATE TABLE IF NOT EXISTS DEFINITIVA (
   Year_Birth INT NOT NULL,
   Education TEXT NOT NULL,
   Marital_Status TEXT NOT NULL,
-  Income INT NOT NULL,
+  Income INT,
   Kidhome INT NOT NULL,
   Teenhome INT NOT NULL,
-  Dt_Customer INT NOT NULL,  --trigger to insert 
+  Dt_Customer TEXT NOT NULL,  --trigger to insert
   Recency INT NOT NULL,
   MntWines INT NOT NULL,
   MntFruits INT NOT NULL,
@@ -62,7 +65,7 @@ CREATE TABLE IF NOT EXISTS DEFINITIVA (
   NumWebPurchases INT NOT NULL,
   NumCatalogPurchases INT NOT NULL,
   NumStorePurchases INT NOT NULL,
-  FOREIGN KEY(Dt_Customer) REFERENCES DAY(ID),
+  FOREIGN KEY(Dt_Customer) REFERENCES DAY(ID_text),
   PRIMARY KEY(ID)
 );
 
@@ -125,30 +128,31 @@ DECLARE
   auxQuarter QUARTER.quarter%TYPE;
   auxMonth MONTH.month%TYPE;
   auxDay DAY.day_t%TYPE;
+  dayString TEXT;
+  monthString TEXT;
+  yearString TEXT;
   auxDate DATE;
-  auxStringDate TEXT;
   auxDayOfWeek INTEGER;
   isWeekend BOOLEAN;
-  idDay DAY.ID%TYPE;
+  idDay DAY.ID_text%TYPE;
 BEGIN
 
-  auxMonth := split_part(new.Dt_Customer, '/', 1);
-  auxDay := split_part(new.Dt_Customer, '/', 2);
-  auxYear := split_part(new.Dt_Customer, '/', 3);
+  monthString := split_part(new.Dt_Customer, '/', 1);
+  dayString := split_part(new.Dt_Customer, '/', 2);
+  yearString := split_part(new.Dt_Customer, '/', 3);
 
-  auxStringDate := CONCAT(auxYear, auxMonth, auxDay);
-  auxDate := TO_DATE(auxStringDate, 'YYYYMMDD');
+  auxDate := TO_DATE(new.Dt_Customer, 'MM/DD/YYYY');
 
-  IF (auxMonth LIKE '' OR auxDay LIKE '' OR auxYear LIKE '') THEN
+  IF (monthString LIKE '' OR dayString LIKE '' OR yearString LIKE '') THEN
     RAISE EXCEPTION 'INVALID DT_CUSTOMER';
   END IF;
 
-  auxMonth := CAST(auxMonth AS INT);
-  auxDay := CAST(auxDay AS INT);
-  auxYear := CAST(auxYear AS INT);
+  auxMonth := CAST(monthString AS INT);
+  auxDay := CAST(dayString AS INT);
+  auxYear := CAST(yearString AS INT);
 
-  auxSemester := CEILING(auxMonth/6);
-  auxQuarter := CEILING(auxMonth/3);
+  auxSemester := (auxMonth-1)/6+1;
+  auxQuarter := (auxMonth-1)/3+1;
 
   -- The day of the week (0 - 6; Sunday is 0)
   auxDayOfWeek := EXTRACT(DOW FROM auxDate);
@@ -171,16 +175,20 @@ BEGIN
     INSERT INTO MONTH VALUES(auxMonth, auxQuarter, auxYear, monthName(auxMonth));
   END IF;
 
-  IF (NOT EXISTS(SELECT day_t FROM DAY WHERE day = auxDay AND month = auxMonth AND year = auxYear)) THEN
-    INSERT INTO DAY(day_t, month, year, day_name, isWeekend) VALUES(auxDay, auxMonth, auxYear, dayName(auxDayOfWeek), isWeekend);
+  IF (NOT EXISTS(SELECT day_t FROM DAY WHERE day_t = auxDay AND month = auxMonth AND year = auxYear)) THEN
+    idDay := (SELECT COALESCE((MAX(ID) + 1),1)::TEXT FROM DAY);
+    INSERT INTO DAY(ID_text, day_t, month, year, day_name, isWeekend) VALUES(idDay, auxDay, auxMonth, auxYear, dayName(auxDayOfWeek), isWeekend);
   END IF;
 
-  idDay := (SELECT ID FROM DAY WHERE day = auxDay AND month = auxMonth AND year = auxYear);
+  idDay := (SELECT ID_text FROM DAY WHERE day_t = auxDay AND month = auxMonth AND year = auxYear);
 
-  INSERT INTO DEFINITIVA VALUES(new.ID, new.Year_Birth, new.Education, new.Marital_Status, new.Income, new.Kidhome, new.Teenhome, idDay, new.Recency, new.MntWines, new.MntFruits, new.MntMeatProducts, new.MntFishProducts, new.MntSweetProducts, new.NumDealsPurchases, new.NumWebPurchases, new.NumCatalogPurchases, new.NumStorePurchases);
+  new.dt_customer = idDay;
 
+  IF (new.income IS NULL) THEN
+      new.income = 0;
+  END IF;
   RETURN new;
-END;
+END
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER beforeInsertDtCustomer
@@ -191,4 +199,183 @@ EXECUTE PROCEDURE fillTable(); -- corre un "Trigger PSM"
 
 -- CODIGO FUNCIONES
 
--- CREATE OR REPLACE FUNCTION ReporteConsolidado(IN yearAmount INTEGER);
+CREATE OR REPLACE FUNCTION getAge(IN yearBirth INTEGER) RETURNS INTEGER AS $$
+  BEGIN
+    RETURN EXTRACT(YEAR FROM CURRENT_DATE) - yearBirth;
+  END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION printData(IN currentYear INTEGER, IN typeText TEXT, IN auxText TEXT, IN recency NUMERIC, IN frecuency NUMERIC, IN monetary NUMERIC) RETURNS VOID AS $$
+  BEGIN
+    IF (currentYear <> -1) THEN
+      RAISE NOTICE '%   % %    % % %', currentYear, typeText, auxText, recency::INTEGER, frecuency::INTEGER, monetary::INTEGER;
+    ELSE
+      RAISE NOTICE '----   % %    % % %', typeText, auxText, recency::INTEGER, frecuency::INTEGER, monetary::INTEGER;
+    END IF;
+  END
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION readCursor(IN cursor_t REFCURSOR, IN currentYear INTEGER, IN cursorType TEXT) RETURNS VOID AS $$
+  DECLARE
+    printYear BOOLEAN DEFAULT FALSE;
+    typeText TEXT DEFAULT '';
+    auxText TEXT DEFAULT '';
+    i RECORD;
+  BEGIN
+    IF (cursorType = 'BR') THEN
+      printYear := TRUE;
+    END IF;
+    LOOP
+      FETCH cursor_t INTO i;
+      EXIT WHEN NOT FOUND;
+      IF (cursorType = 'BR') THEN
+        typeText := 'Birth Range: ';
+        CASE
+          WHEN i.birth_range = '1' THEN auxText := '1) - de 25';
+          WHEN i.birth_range = '2' THEN auxText := '2) de 25 a 39';
+          WHEN i.birth_range = '3' THEN auxText := '3) de 40 a 49';
+          WHEN i.birth_range = '4' THEN auxText := '4) de 50 a 69';
+          WHEN i.birth_range = '5' THEN auxText := '5) de 70 o +';
+        END CASE;
+      ELSIF (cursorType = 'ES') THEN
+        typeText := 'Education: ';
+        auxText := i.education_status;
+      ELSIF (cursorType = 'IR') THEN
+        typeText := 'Income Range: ';
+        CASE
+          WHEN i.income_range = '1' THEN auxText := '1) + de 100K';
+          WHEN i.income_range = '2' THEN auxText := '2) entre 70K y 100K';
+          WHEN i.income_range = '3' THEN auxText := '3) entre 30K y 70K';
+          WHEN i.income_range = '4' THEN auxText := '4) entre 10K y 30K';
+          WHEN i.income_range = '5' THEN auxText := '5) - de 10K';
+        END CASE;
+      ELSE
+        typeText := 'Marital Status: ';
+        auxText := i.marital_status;
+      END IF;
+
+      IF (printYear) THEN
+        PERFORM printData(currentYear, typeText, auxText, i.recency, i.frequency, i.monetary);
+        printYear := FALSE;
+      ELSE
+        PERFORM printData(-1, typeText, auxText, i.recency, i.frequency, i.monetary);
+      END IF;
+
+    END LOOP;
+  END
+$$ LANGUAGE plpgsql;
+
+
+
+CREATE OR REPLACE FUNCTION ReporteConsolidado(IN yearAmount INTEGER) RETURNS VOID AS $$
+  DECLARE
+    currentYear INT;
+    maxYear INT;
+    birthRangeCursor REFCURSOR;
+    educationCursor REFCURSOR;
+    incomeRangeCursor REFCURSOR;
+    maritalStatusCursor REFCURSOR;
+    totalRecency INT;
+    totalFrecuency INT;
+    totalMonetary INT;
+  BEGIN
+    IF (yearAmount <= 0) THEN
+      RAISE WARNING 'La cantidad de años debe ser mayor a 0.';
+      RETURN;
+    END IF;
+
+    SELECT MIN(year) INTO currentYear FROM year;
+    SELECT MAX(year) INTO maxYear FROM year;
+
+    RAISE NOTICE '--------------CONSOLIDATED CUSTOMER REPORT----------------';
+    RAISE NOTICE '----------------------------------------------------------';
+    RAISE NOTICE 'Year---Category-----------------Recency-Frecuency-Monetary';
+
+    CREATE TEMP TABLE TempTable AS
+        SELECT
+            CASE
+                WHEN getAge(Year_Birth) < 25 THEN '1'
+                WHEN getAge(Year_Birth) >= 25 AND getAge(Year_Birth) < 40 THEN '2'
+                WHEN getAge(Year_Birth) >= 40 AND getAge(Year_Birth) < 50 THEN '3'
+                WHEN getAge(Year_Birth) >= 50 AND getAge(Year_Birth) < 70 THEN '4'
+                ELSE '5'
+              END AS birth_range,
+              education AS education_status,
+            CASE
+                WHEN Income > 100000 THEN '1'
+                WHEN Income BETWEEN 70001 AND 100000 THEN '2'
+                WHEN Income BETWEEN 30001 AND 70000 THEN '3'
+                WHEN Income BETWEEN 10000 AND 30000 THEN '4'
+                ELSE '5'
+              END AS income_range,
+            marital_status,
+            dt_customer,
+            recency, NumDealsPurchases + NumWebPurchases + NumCatalogPurchases + NumStorePurchases AS frequency, MntWines + MntFruits + MntMeatProducts + MntFishProducts + MntSweetProducts AS monetary
+          FROM definitiva;
+
+    WHILE (yearAmount > 0 AND currentYear <= maxYear)
+      LOOP
+        RAISE NOTICE '----------------------------------------------------------';
+        OPEN birthRangeCursor FOR SELECT birth_range, AVG(recency) AS recency, AVG(frequency) AS frequency, AVG(monetary) AS monetary
+          FROM TempTable
+          WHERE currentYear = (SELECT year FROM DAY AS d WHERE d.ID_text = Dt_Customer)
+          GROUP BY birth_range
+          ORDER BY birth_range;
+
+          PERFORM readCursor(birthRangeCursor, currentYear, 'BR');
+        CLOSE birthRangeCursor;
+
+        OPEN educationCursor FOR SELECT education_status, AVG(recency) AS recency, AVG(frequency) AS frequency, AVG(monetary) AS monetary
+          FROM TempTable
+          WHERE currentYear = (SELECT year FROM DAY AS d WHERE d.ID_text = Dt_Customer)
+          GROUP BY education_status
+          ORDER BY education_status;
+
+          PERFORM readCursor(educationCursor, currentYear, 'ES');
+        CLOSE educationCursor;
+
+        OPEN incomeRangeCursor FOR SELECT income_range, AVG(recency) AS recency, AVG(frequency) AS frequency, AVG(monetary) AS monetary
+          FROM TempTable
+          WHERE currentYear = (SELECT year FROM DAY AS d WHERE d.ID_text = Dt_Customer)
+          GROUP BY income_range
+          ORDER BY income_range;
+
+          PERFORM readCursor(incomeRangeCursor, currentYear, 'IR');
+        CLOSE incomeRangeCursor;
+
+        OPEN maritalStatusCursor FOR SELECT marital_status, AVG(recency) AS recency, AVG(frequency) AS frequency, AVG(monetary) AS monetary
+          FROM TempTable
+          WHERE currentYear = (SELECT year FROM DAY AS d WHERE d.ID_text = Dt_Customer)
+          GROUP BY marital_status
+          ORDER BY marital_status;
+
+          PERFORM readCursor(maritalStatusCursor, currentYear, 'MS');
+        CLOSE maritalStatusCursor;
+
+        totalRecency := (SELECT AVG(recency) FROM TempTable WHERE currentYear = (SELECT year FROM DAY AS d WHERE d.ID_text = Dt_Customer));
+        totalFrecuency := (SELECT AVG(frequency) FROM TempTable WHERE currentYear = (SELECT year FROM DAY AS d WHERE d.ID_text = Dt_Customer));
+        totalMonetary := (SELECT AVG(monetary) FROM TempTable WHERE currentYear = (SELECT year FROM DAY AS d WHERE d.ID_text = Dt_Customer));
+
+        RAISE NOTICE '-----------------------------------%   %   %', totalRecency, totalFrecuency, totalMonetary;
+
+        yearAmount := yearAmount - 1;
+        currentYear := currentYear + 1;
+      END LOOP;
+
+    DROP TABLE TempTable;
+    RETURN;
+  END;
+$$ LANGUAGE plpgsql;
+
+SELECT ReporteConsolidado(2);
+
+-- -- DROPS
+--
+-- DROP TABLE IF EXISTS definitiva;
+-- DROP TABLE IF EXISTS day;
+-- DROP TABLE IF EXISTS month;
+-- DROP TABLE IF EXISTS quarter;
+-- DROP TABLE IF EXISTS semester;
+-- DROP TABLE IF EXISTS year CASCADE;
+-- --------
+-- DROP TRIGGER IF EXISTS beforeInsertDtCustomer ON definitiva;
