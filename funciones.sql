@@ -201,7 +201,7 @@ EXECUTE PROCEDURE fillTable(); -- corre un "Trigger PSM"
 
 CREATE OR REPLACE FUNCTION getAge(IN yearBirth INTEGER) RETURNS INTEGER AS $$
   BEGIN
-    RETURN EXTRACT(YEAR FROM CURRENT_DATE) - yearBirth;
+    RETURN 2016 - yearBirth;
   END;
 $$ LANGUAGE plpgsql;
 
@@ -370,7 +370,7 @@ $$ LANGUAGE plpgsql;
 SELECT ReporteConsolidado(2);
 
 -- -- DROPS
---
+-- 
 -- DROP TABLE IF EXISTS definitiva;
 -- DROP TABLE IF EXISTS day;
 -- DROP TABLE IF EXISTS month;
